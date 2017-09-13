@@ -82,6 +82,31 @@ included within the directory.
 The HTML generated from the Rmarkdown is available at 
 [01-tidy-data.html](http://jmlondon.github.io/aleutpvdata/01-tidy-data.html)
 
+## LHX Deployments in 2016
+
+In 2016, 10 harbor seals were released with surgically implanted life-history
+tags (LHX). Below is a table of those animals and their unique `speno`
+
+```{r, echo = FALSE}
+knitr::kable(
+tibble::tribble(
+~SpeNo,	~Age,	~Sex,
+# ------------|------------|---------
+"PV2014_2005", "adult",     "female",
+"PV2016_3011", "sub-adult", "female",
+"PV2016_3012", "adult",     "female",
+"PV2016_3016", "sub-adult", "female",
+"PV2016_3019", "sub-adult",	"male",
+"PV2016_3022", "adult",     "male",
+"PV2016_3027", "sub-adult", "female",
+"PV2016_3031", "adult",     "male",
+"PV2016_3032", "sub-adult",	"male",
+"PV2016_3033", "sub-adult", "female"
+),
+booktabs = TRUE,
+caption = "Table of LHX Surgery Animals")
+```
+
 ### Citation -- DRAFT: DO NOT CITE AT THIS TIME
 
 This data package is under heavy development. Please do not cite this data or
