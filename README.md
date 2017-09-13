@@ -40,12 +40,16 @@ This directory is where the raw archive/zip files downloaded from the Wildlife C
 
 Any processing of data is all handled within the Rmarkdown (`*.Rmd`) files included within the directory.
 
+The HTML generated from the Rmarkdown is available at [00-get-data.html](http://jmlondon.github.io/aleutpvdata/00-get-data.html)
+
 The `datapack` Directory
 ------------------------
 
 This directory is where the processed data are created and stored in comma-separated format.They are not included within the git repository for efficiency. The eventual plan is for these files to be stored and archive on the Arctic Data Center and accessible via DataONE. Most users who aren't accessing these data through the R programming environment will want to work with these data files.
 
 Any processing of data is all handled within the Rmarkdown (`*.Rmd`) files included within the directory.
+
+The HTML generated from the Rmarkdown is available at [01-tidy-data.html](http://jmlondon.github.io/aleutpvdata/01-tidy-data.html)
 
 ### Citation -- DRAFT: DO NOT CITE AT THIS TIME
 
