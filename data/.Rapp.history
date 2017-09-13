@@ -1,0 +1,2 @@
+load("/Users/josh.london/@work/aleutpv/data/aleutpv_deploy.rds")
+load("/Users/josh.london/@work/aleutpv/data/crawl_models.rds")

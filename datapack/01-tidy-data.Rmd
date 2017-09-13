@@ -1,0 +1,439 @@
+---
+title: "Satellite Telemetry Dataset: harbor seals in the Aleutian Islands, Alaska (processed)"
+subtitle: "Tidy Data Processing"
+draft: true
+author:
+- name: Josh M. London
+  affiliation: 1
+address:
+- code: 1
+  address: Alaska Fisheries Science Center, NOAA Fisheries, Seattle, Washington, USA 
+  email: josh.london@noaa.gov
+  orcid: http://orcid.org/0000-0002-3647-5046
+- code: 2
+  address: Alaska Fisheries Science Center, NOAA Fisheries, Seattle, Washington, USA 
+disclaimer: >
+  The scientific results and conclusions, as well as any views or opinions 
+  expressed herein, are those of the author(s) and do not necessarily reflect 
+  those of NOAA or the Department of Commerce.
+abstract: >
+  This document describes the technical details of tidying satellite
+  telemetry data associated with the Aleutian harbor seal research project. 
+  Data from the locations, histos, and behavior tables are tidy'd and joined
+  with seal data from the PEP enterprise database. Data will be made available
+  via an R package and also as *.csv files organized into a 'data package' and, 
+  eventually, be uploaded to the Arctic Data Center.
+output: 
+  uswebr::html_uswds:
+    number_sections: FALSE
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+# required packages
+
+The `wcUtils` package is available for install from GitHub and the other
+packages are available for install from CRAN.
+
+```{r install-wcutils}
+if (!require('devtools')) install.packages('devtools')
+if (!require('wcUtils')) {
+  devtools::install_github('jmlondon/wcUtils')
+}
+if (!require('tidyverse')) install.packages('tidyverse')
+if (!require('RPostgreSQL')) install.packages('RPostgreSQL')
+if (!require('xts')) install.packages('xts')
+```
+
+# database connections
+
+The deployment data from Wildlife Computers does not include much of the 
+detailed information regarding age, sex, species, etc of the the seal. The
+*DeployID* field provides a unique key for associating each deployment with
+a seal. These data are stored in a local, enterprise database. So, first thing
+we will do is setup our connection to this database.
+
+```{r db-connect}
+library(DBI)
+con <- dbConnect(RPostgreSQL::PostgreSQL(), 
+                 host = Sys.getenv("PEP_IP"),
+                 user = Sys.getenv("PEP_USR"),
+                 dbname = "pep")
+```
+
+# transform and tidy data
+
+After downloading the deployment archives from the data portal, there are some
+additional steps we need to take in order to get things ready for analysis. 
+Since each deployment is downloaded as a separate entity, we will combine all 
+deployments into a single data.frame. There are some additional columns 
+(e.g. *gpe-\** columns) that are not relevant for our work so we'll remove them.
+
+We also need to extract each of these archive zip files into a temporary
+directory so we can then pull out the `*.csv` files of interest
+
+```{r}
+zipfiles <- list.files(file.path("..","datapack-raw"),
+                       pattern = ".zip",full.names = TRUE)
+temp_dir <- file.path(tempdir())
+for (zipfile in zipfiles) {
+  unzip(file.path(zipfile),overwrite = TRUE, exdir = temp_dir)
+}
+```
+
+## tidy location data
+
+All deployment archives will have a `*-Locations.csv` that includes all of the
+Argos locations for that deployment. Some deployments, however, also include
+a FastLoc GPS sensor and the archive also includes a `*-Locations.csv` with
+GPS quality locations. In those cases where FastLoc GPS data exists, we want
+to include those data. So, we will need to do some checking of file names within
+each deployment to sort this out.
+
+```{r}
+# column data type definitions
+my_cols <- cols(
+  DeployID = col_character(),
+  Ptt = col_integer(),
+  Instr = col_character(),
+  Date = col_datetime("%H:%M:%S %d-%b-%Y"),
+  Type = col_character(),
+  Quality = col_character(),
+  Latitude = col_double(),
+  Longitude = col_double(),
+  `Error radius` = col_integer(),
+  `Error Semi-major axis` = col_integer(),
+  `Error Semi-minor axis` = col_integer(),
+  `Error Ellipse orientation` = col_integer(),
+  Offset = col_character(),
+  `Offset orientation` = col_character(),
+  `GPE MSD` = col_character(),
+  `GPE U` = col_character(),
+  Count = col_character(),
+  Comment = col_character()
+)
+
+# local functions
+# identify ptt value from filename
+extract_ptt <- function(fstring) {
+  if (nchar(fstring) > 20) {
+    ptt <- strsplit(fstring,"-")[[1]][2]
+  } else {
+    ptt <- strsplit(fstring,"-")[[1]][1]
+  }
+  return(ptt)
+}
+
+# identify gps fastloc deployments
+fastloc_gps <- function(fstring) {
+  if (nchar(fstring) > 20) {
+    gps <- TRUE
+  } else {
+    gps <- FALSE
+  }
+  return(gps)
+}
+
+# make our column names consistent
+make_names <- function(x) {
+  new_names <- make.names(colnames(x))
+  new_names <- gsub("\\.", "_", new_names)
+  new_names <- tolower(new_names)
+  colnames(x) <- new_names
+  x
+}
+
+loc_files <- list.files(temp_dir, pattern = "*-Locations.csv")
+
+# read csv data into a nested dataframe
+tbl_locs <- data_frame(filename = loc_files) %>%
+  mutate(
+    file_ptt = map_chr(filename, ~ extract_ptt(.)),
+    file_gps = map_lgl(filename, ~ fastloc_gps(.)),
+    file_contents = map(filename,
+                        ~ read_csv(file.path(temp_dir, .),
+                                   col_types = my_cols))
+  ) 
+
+# filter out argos location files that also have gps data files
+gps_files <- tbl_locs %>% filter(file_gps)
+argos_files <- tbl_locs %>% filter(!file_gps, 
+                                   !file_ptt %in% gps_files$file_ptt)
+
+# merge the data back together and clean up for our final table
+tbl_locs <- dplyr::bind_rows(gps_files,argos_files) %>% 
+  tidyr::unnest() %>% 
+  dplyr::select(-(filename),-(file_ptt),-(file_gps),-(Ptt)) %>% 
+  make_names() %>%  
+  dplyr::rename(date_time = date) %>% 
+  dplyr::arrange(deployid, date_time)
+
+tbl_locs 
+
+```
+
+The locations data is subject to having consecutive records with duplicate times 
+but slightly different coordinates. We don't really want to throw out any 
+records, so we'll just add *1 second* to the duplicate record.
+
+```{r}
+make_unique <- function(x) {
+  xts::make.time.unique(x$date_time,eps = 1)
+}
+
+tbl_locs <- tbl_locs %>% 
+  dplyr::arrange(deployid,date_time) %>% 
+  dplyr::group_by(deployid) %>% tidyr::nest() %>% 
+  dplyr::mutate(unique_time = purrr::map(data, make_unique)) %>% 
+  tidyr::unnest() %>% 
+  dplyr::select(-date_time) %>% rename(date_time = unique_time)
+```
+
+Let's take a look at some basic summary stats on each deployment
+
+```{r}
+
+tbl_locs %>% group_by(deployid) %>% 
+  summarise(num_locs = n(),
+            start_date = min(date_time),
+            end_date = max(date_time))
+```
+
+The information downloaded from the WCDP does not contain any details regarding
+the seal the tag was deployed on (e.g. *age*, *sex*, *release date*, *end
+date*). We have that data stored seperately and link the information via the
+assigned *deployid* value which is present in both data sources. The *enddate*
+values have been specified by PEP researchers based on examination of the data.
+In most cases, the *enddate* corresponds with the last transmission from the
+tag. However, some tags may fall of on shore and continue to transmit well after
+detaching from the seal. We also need to standardise the naming scheme for
+columns and rely on a custom `make_names` function to do this.
+
+```{r}
+
+tbl_locs <- con %>% tbl(dbplyr::in_schema("telem","tag_deployments")) %>% 
+  dplyr::collect() %>% 
+  dplyr::right_join(tbl_locs, by = 'deployid')
+
+```
+
+## percent dry timeline data
+
+The percent-dry timeline data tracks the percentage of each hour during the
+deployment that the tag was dry. This data is mostly used to study haul-out
+behavior of seals. Since these data are stored within the histos data file
+structure, some processing needs to happend in order to make these data more
+analysis friendly. 
+
+```{r}
+# column data type definitions
+my_cols <- readr::cols(
+  DeployID = readr::col_character(),
+  Ptt = readr::col_character(),
+  DepthSensor = readr::col_character(),
+  Source = readr::col_character(),
+  Instr = readr::col_character(),
+  HistType = readr::col_character(),
+  Date = readr::col_datetime("%H:%M:%S %d-%b-%Y"),
+  `Time Offset` = readr::col_double(),
+  Count = readr::col_integer(),
+  BadTherm = readr::col_integer(),
+  LocationQuality = readr::col_character(),
+  Latitude = readr::col_double(),
+  Longitude = readr::col_double(),
+  NumBins = readr::col_integer(),
+  Sum = readr::col_integer(),
+  Bin1 = readr::col_double(),  Bin2 = readr::col_double(), 
+  Bin3 = readr::col_double(),  Bin4 = readr::col_double(), 
+  Bin5 = readr::col_double(),  Bin6 = readr::col_double(),
+  Bin7 = readr::col_double(),  Bin8 = readr::col_double(), 
+  Bin9 = readr::col_double(),  Bin10 = readr::col_double(), 
+  Bin11 = readr::col_double(), Bin12 = readr::col_double(),
+  Bin13 = readr::col_double(), Bin14 = readr::col_double(), 
+  Bin15 = readr::col_double(), Bin16 = readr::col_double(), 
+  Bin17 = readr::col_double(), Bin18 = readr::col_double(),
+  Bin19 = readr::col_double(), Bin20 = readr::col_double(), 
+  Bin21 = readr::col_double(), Bin22 = readr::col_double(), 
+  Bin23 = readr::col_double(), Bin24 = readr::col_double(),
+  Bin25 = readr::col_double(), Bin26 = readr::col_double(), 
+  Bin27 = readr::col_double(), Bin28 = readr::col_double(), 
+  Bin29 = readr::col_double(), Bin30 = readr::col_double(),
+  Bin31 = readr::col_double(), Bin32 = readr::col_double(), 
+  Bin33 = readr::col_double(), Bin34 = readr::col_double(), 
+  Bin35 = readr::col_double(), Bin36 = readr::col_double(),
+  Bin37 = readr::col_double(), Bin38 = readr::col_double(), 
+  Bin39 = readr::col_double(), Bin40 = readr::col_double(), 
+  Bin41 = readr::col_double(), Bin42 = readr::col_double(),
+  Bin43 = readr::col_double(), Bin44 = readr::col_double(), 
+  Bin45 = readr::col_double(), Bin46 = readr::col_double(), 
+  Bin47 = readr::col_double(), Bin48 = readr::col_double(),
+  Bin49 = readr::col_double(), Bin50 = readr::col_double(), 
+  Bin51 = readr::col_double(), Bin52 = readr::col_double(), 
+  Bin53 = readr::col_double(), Bin54 = readr::col_double(),
+  Bin55 = readr::col_double(), Bin56 = readr::col_double(), 
+  Bin57 = readr::col_double(), Bin58 = readr::col_double(), 
+  Bin59 = readr::col_double(), Bin60 = readr::col_double(),
+  Bin61 = readr::col_double(), Bin62 = readr::col_double(), 
+  Bin63 = readr::col_double(), Bin64 = readr::col_double(), 
+  Bin65 = readr::col_double(), Bin66 = readr::col_double(),
+  Bin67 = readr::col_double(), Bin68 = readr::col_double(), 
+  Bin69 = readr::col_double(), Bin70 = readr::col_double(), 
+  Bin71 = readr::col_double(), Bin72 = readr::col_double()
+)
+
+tbl_percent <- list.files(temp_dir, pattern = "*-Histos.csv",
+                          full.names = TRUE) %>% 
+  purrr::map(read_csv,col_types = my_cols) %>% 
+  dplyr::bind_rows() %>% 
+  make_names() %>% 
+  dplyr::filter(histtype %in% c("Percent")) %>% 
+  dplyr::select(-(bin25:bin72)) %>% 
+  dplyr::select(-(ptt)) %>% 
+  dplyr::arrange(deployid, date)
+
+tbl_percent
+```
+
+Hourly percent-dry data are stored within the first 24 bin columns. Each bin
+column refers to the hour of the day (bin1 = 00:00-01:00) in UTC time. So,
+we'll do some tidying, gathering, mutating and summarizing to create a more
+meaningful data frame.
+
+```{r}
+## Create a tbl_df that Relates Bin Columns to Day Hours
+bins <- tibble(bin = paste("bin",1:24,sep = ""),hour = 0:23)
+
+## Chain Together Multiple Commands to Create Our Tidy Dataset
+tbl_percent <- tbl_percent %>% 
+  tidyr::gather(bin,percent_dry, starts_with('bin')) %>%
+  dplyr::left_join(bins, by = "bin") %>%
+  dplyr::rename(date_hour = date) %>% 
+  dplyr::mutate(date_hour = date_hour + lubridate::hours(hour)) %>% 
+  dplyr::select(deployid,date_hour,percent_dry) %>%
+  group_by(deployid, date_hour) %>% 
+  summarize(percent_dry = mean(percent_dry)) %>% 
+  ungroup() %>% 
+  dplyr::arrange(deployid,date_hour)
+```
+
+```{r}
+tbl_percent <- con %>% tbl(dbplyr::in_schema("telem","tag_deployments")) %>% 
+  dplyr::collect() %>% 
+  dplyr::right_join(tbl_percent, by = 'deployid')
+tbl_percent
+```
+
+## dive behavior data
+
+The behavior data stream contains all of the information we have regarding dive
+behavior. There are only a few additional steps that need to be dealt with. We
+will rename a few columns (*count*, *start*, *end*) so as not to conflict with
+reservered words in the database.
+
+```{r parse-data-behavior}
+# column data type definitions
+my_cols <- readr::cols_only(
+    DeployID = readr::col_character(),
+    Ptt = readr::col_character(),
+    DepthSensor = readr::col_character(),
+    Source = readr::col_character(),
+    Instr = readr::col_character(),
+    Count = readr::col_integer(),
+    Start = readr::col_datetime("%H:%M:%S %d-%b-%Y"),
+    End = readr::col_datetime("%H:%M:%S %d-%b-%Y"),
+    What = readr::col_character(),
+    Number = readr::col_integer(),
+    Shape = readr::col_character(),
+    DepthMin = readr::col_double(),
+    DepthMax = readr::col_double(),
+    DurationMin = readr::col_double(),
+    DurationMax = readr::col_double(),
+    Shallow = readr::col_integer(),
+    Deep = readr::col_integer()
+  )
+
+tbl_behav <- list.files(temp_dir, pattern = "*-Behavior.csv",
+                          full.names = TRUE) %>% 
+  purrr::map(read_csv,col_types = my_cols) %>% 
+  dplyr::bind_rows() %>% 
+  make_names() %>%  
+  dplyr::rename(behav_start = start,
+                behav_end = end,
+                msg_count = count) %>% 
+  dplyr::select(-(ptt)) %>% 
+  dplyr::arrange(deployid, behav_start)
+
+tbl_behav <- con %>% tbl(dbplyr::in_schema("telem","tag_deployments")) %>% 
+  dplyr::collect() %>% 
+  dplyr::right_join(tbl_behav, by = 'deployid')
+tbl_behav
+```
+
+The behavior table includes 3 types of data related to the behavior timeline:
+*Message*,*Surface*, and *Dive*. To make it easier to work with, we will create
+a nested tibble that is split by these three behavior message types.
+
+### dive behavior data
+
+```{r}
+tbl_behav_nest <- tbl_behav %>% group_by(what) %>% nest()
+```
+
+```{r}
+tbl_behav_dive <- tbl_behav_nest %>% 
+  dplyr::filter(what == "Dive") %>% 
+  tidyr::unnest() %>% 
+  dplyr::select(-(ptt))
+
+tbl_behav_dive <- tbl_behav_dive %>% 
+  dplyr::mutate(end_dt = ifelse(is.na(end_dt), Sys.time(), end_dt)) %>% 
+  dplyr::mutate(end_dt = as.POSIXct(end_dt,
+                              tz = "UTC",
+                              origin = "1970-01-01"))
+
+tbl_behav_dive
+```
+
+### surface behavior data
+
+```{r}
+tbl_behav_surf <- tbl_behav_nest %>% 
+  dplyr::filter(what == "Surface") %>% 
+  tidyr::unnest() %>% 
+  dplyr::select(-(ptt))
+
+tbl_behav_surf <- tbl_behav_surf %>% 
+  dplyr::mutate(end_dt = ifelse(is.na(end_dt), Sys.time(), end_dt)) %>% 
+  dplyr::mutate(end_dt = as.POSIXct(end_dt,
+                              tz = "UTC",
+                              origin = "1970-01-01"))
+
+tbl_behav_surf
+```
+
+# create export data files
+
+We are going to create two types of export data files: comma-separated files and
+R data files. The comma-separated files will be stored within the data package
+(and, eventually, archived with the Arctic Data Center). The R data files will
+be stored within the data directory of this R package so data can be easily
+accessilbe by R users. Future versions of the R package will include an 
+`install_data` function that will pull data form the Arctic Data Center instead
+of distributing with the R package.
+
+```{r}
+readr::write_csv(tbl_locs, path = 'aleutpv_tbl_locs.csv')
+readr::write_csv(tbl_percent, path = 'aleutpv_tbl_percent.csv')
+readr::write_csv(tbl_behav_dive, path = 'aleutpv_tbl_behav_dive.csv')
+readr::write_csv(tbl_behav_surf, path = 'aleutpv_tbl_behav_surf.csv')
+
+save(tbl_locs, file = '../data/tbl_locs.rda')
+save(tbl_percent, file = '../data/tbl_percent.rda')
+save(tbl_behav_dive, file = '../data/tbl_behav_dive.rda')
+save(tbl_behav_surf, file = '../data/tbl_behav_surf.rda')
+
+```
+
+*****************************

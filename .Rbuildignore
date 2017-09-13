@@ -1,0 +1,11 @@
+^.*\.Rproj$
+^\.Rproj\.user$
+makefile
+^.*\.Rmd$
+^.*\.md$
+^.*\.html$
+datapack\*
+datapack-raw\*
+scratch.R
+^README\.Rmd$
+^README-.*\.png$

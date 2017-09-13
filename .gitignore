@@ -1,0 +1,6 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+datapack/*.csv
+datapack-raw/*.zip
