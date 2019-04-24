@@ -42,9 +42,11 @@ if (!require('devtools')) install.packages('devtools')
 if (!require('wcUtils')) {
   devtools::install_github('jmlondon/wcUtils')
 }
-if (!require('tidyverse')) install.packages('tidyverse')
-if (!require('RPostgreSQL')) install.packages('RPostgreSQL')
-if (!require('xts')) install.packages('xts')
+
+library(tidyverse)
+library(here)
+library(RPostgreSQL)
+library(xts)
 ```
 
 # database connections
@@ -57,9 +59,10 @@ we will do is setup our connection to this database.
 
 ```{r db-connect}
 library(DBI)
-con <- dbConnect(RPostgreSQL::PostgreSQL(), 
+con <- dbConnect(RPostgres::Postgres(), 
                  host = Sys.getenv("PEP_IP"),
-                 user = Sys.getenv("PEP_USR"),
+                 user = keyringr::get_kc_account("pgpep_londonj"),
+                 password = keyringr::decrypt_kc_pw("pgpep_londonj"),
                  dbname = "pep")
 ```
 
@@ -75,7 +78,7 @@ We also need to extract each of these archive zip files into a temporary
 directory so we can then pull out the `*.csv` files of interest
 
 ```{r}
-zipfiles <- list.files(file.path("..","datapack-raw"),
+zipfiles <- list.files(here::here("datapack-raw"),
                        pattern = ".zip",full.names = TRUE)
 temp_dir <- file.path(tempdir())
 for (zipfile in zipfiles) {
@@ -148,7 +151,7 @@ make_names <- function(x) {
 loc_files <- list.files(temp_dir, pattern = "*-Locations.csv")
 
 # read csv data into a nested dataframe
-tbl_locs <- data_frame(filename = loc_files) %>%
+tbl_locs <- tibble(filename = loc_files) %>%
   mutate(
     file_ptt = map_chr(filename, ~ extract_ptt(.)),
     file_gps = map_lgl(filename, ~ fastloc_gps(.)),
@@ -216,6 +219,23 @@ columns and rely on a custom `make_names` function to do this.
 tbl_locs <- con %>% tbl(dbplyr::in_schema("telem","tag_deployments")) %>% 
   dplyr::collect() %>% 
   dplyr::right_join(tbl_locs, by = 'deployid')
+```
+
+Check to make sure deployment start and end dates are set
+
+```{r}
+check_dates <- tbl_locs %>% filter(is.na(deploy_dt) | is.na(end_dt)) %>% 
+  group_by(deployid) %>% 
+  summarise(nlocs = n())
+check_dates
+
+if(nrow(check_dates) > 0) {
+  warning("Some deployments lack start or end dates in the database")
+}
+
+tbl_locs %>% dplyr::filter(!is.na(deploy_dt) & !is.na(end_dt)) %>% 
+  rowwise() %>% 
+  dplyr::filter(between(date_time,deploy_dt, end_dt))
 
 ```
 
