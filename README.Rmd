@@ -29,7 +29,7 @@ function
 if (!require('devtools')) install.packages('devtools')
 devtools::install_github('jmlondon/aleutpvdata')
 
-library(aleutpv-data)
+library(aleutpvdata)
 
 # list the data sets in the aleutpv-data pkg
 try(data(package = "aleutpvdata")) 
@@ -56,7 +56,7 @@ tidying satellite telemetry data associated with this project
 This directory is where the raw archive/zip files downloaded from the
 Wildlife Computers Data Portal are stored. They are not included within the
 git repository for efficiency. The eventual plan is for these files to be
-stored and archive on the Arctic Data Center and accessible via DataONE. Most
+stored and archive on the Animal Telemetry Network and accessible via DataONE. Most
 users will have no need or interest in accessing these data files. 
 
 Any processing of data is all handled within the Rmarkdown (`*.Rmd`) files
@@ -105,7 +105,7 @@ booktabs = TRUE,
 caption = "Table of LHX Surgery Animals")
 ```
 
-### Citation -- DRAFT: DO NOT CITE AT THIS TIME
+### Citation -- DRAFT: DO NOT CITE OR USE AT THIS TIME
 
 This data package is under heavy development. Please do not cite this data or
 this repository at this time. Any use should be done in close coordination
