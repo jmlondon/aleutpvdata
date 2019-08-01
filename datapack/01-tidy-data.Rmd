@@ -391,25 +391,55 @@ tbl_behav <- con %>% tbl(dbplyr::in_schema("telem","tag_deployments")) %>%
 tbl_behav
 ```
 
+We need to create a cutsom function, `create_tgrp()` that will allow us to 
+assign 5-day summary periods that start with the first behavior date-time value.
+
+```{r}
+create_tgrp <- function(data, breaks) {
+  data <- data %>% 
+    dplyr::mutate(tgrp = cut(.$behav_start, breaks = breaks),
+                  tgrp = as.integer(tgrp))
+  return(data)
+}
+```
+
+After we have our function, we can use this to specify the groups (`tgrp`) and, 
+then, also calculate the proportion of each 5 day period (`behav_proportion`) 
+represented by the behavior data. Note, the `behav_proportion` column can exceed
+1.0 by a small amount because of rounding, etc. Also, we presume that each `tgrp`
+represents exactly 5 days. This isn't exactly the case for the first and last
+`tgrp` as the deployment data doesn't start and end precisely at midnight.
+
+```{r}
+tbl_behav <- tbl_behav %>% 
+  dplyr::filter(what %in% c("Dive","Surface")) %>% 
+  dplyr::mutate(behav_duration = difftime(behav_end,behav_start,
+                                          tz = "UTC",
+                                          units = "secs") %>% 
+                  as.double()) %>% 
+  dplyr::group_by(deployid) %>% 
+  dplyr::arrange(behav_start) %>% 
+  nest() %>% 
+  dplyr::mutate(data = purrr::map(data, create_tgrp,"5 days")) %>% 
+  unnest() %>% 
+  dplyr::group_by(deployid,tgrp) %>% 
+  dplyr::mutate(behav_prop = sum(behav_duration) / 432000)
+```
+
 The behavior table includes 3 types of data related to the behavior timeline:
 *Message*,*Surface*, and *Dive*. To make it easier to work with, we will create
-a nested tibble that is split by these three behavior message types.
+separate tibbles that is correspond to the two behavior message types we are
+interested in (`Dive` and `Surface`).
 
 ### dive behavior data
 
 ```{r}
-tbl_behav_nest <- tbl_behav %>% group_by(what) %>% nest()
-```
-
-```{r}
-tbl_behav_dive <- tbl_behav_nest %>% 
+tbl_behav_dive <- tbl_behav %>% 
   dplyr::filter(what == "Dive") %>% 
-  tidyr::unnest() %>% 
-  dplyr::select(-(ptt))
-
-tbl_behav_dive <- tbl_behav_dive %>% 
-  dplyr::mutate(end_dt = ifelse(is.na(end_dt), Sys.time(), end_dt)) %>% 
-  dplyr::mutate(end_dt = as.POSIXct(end_dt,
+  dplyr::arrange(deployid,behav_start) %>% 
+  dplyr::select(-(ptt)) %>% 
+  dplyr::mutate(end_dt = ifelse(is.na(end_dt), Sys.time(), end_dt),
+                end_dt = as.POSIXct(end_dt,
                               tz = "UTC",
                               origin = "1970-01-01"))
 
@@ -419,14 +449,12 @@ tbl_behav_dive
 ### surface behavior data
 
 ```{r}
-tbl_behav_surf <- tbl_behav_nest %>% 
+tbl_behav_surf <- tbl_behav %>% 
   dplyr::filter(what == "Surface") %>% 
-  tidyr::unnest() %>% 
-  dplyr::select(-(ptt))
-
-tbl_behav_surf <- tbl_behav_surf %>% 
-  dplyr::mutate(end_dt = ifelse(is.na(end_dt), Sys.time(), end_dt)) %>% 
-  dplyr::mutate(end_dt = as.POSIXct(end_dt,
+  dplyr::arrange(deployid,behav_start) %>% 
+  dplyr::select(-(ptt)) %>% 
+  dplyr::mutate(end_dt = ifelse(is.na(end_dt), Sys.time(), end_dt),
+                end_dt = as.POSIXct(end_dt,
                               tz = "UTC",
                               origin = "1970-01-01"))
 
